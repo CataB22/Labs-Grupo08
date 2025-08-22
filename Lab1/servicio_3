@@ -1,0 +1,66 @@
+import socket
+from datetime import datetime
+
+HOST_S3 = 'localhost'
+PORT_S3_SERVER = 65433  # S3 recibe de S2 (UDP)
+HOST_S4 = 'localhost'
+PORT_S4_SERVER = 8000   # S4 (HTTP)
+
+def send_http_post(host, port, mensaje):
+    """Construye y envía manualmente un HTTP POST a S4 usando TCP."""
+    request_body = mensaje
+    http = (
+        "POST / HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Content-Type: text/plain\r\n"
+        f"Content-Length: {len(request_body)}\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        f"{request_body}"
+    )
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((host, port))
+        s.sendall(http.encode('utf-8'))
+        print(f"S3 -> S4 (HTTP POST): {mensaje}")
+        try:
+            resp = s.recv(4096)
+            if resp:
+                print("S4 respondió (HTTP):", resp.decode('utf-8', errors='replace').split("\r\n\r\n")[0])
+        except:
+            pass
+
+def start_udp_server(host, port):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind((host, port))
+        print(f"Servicio 3 (servidor UDP) escuchando en {host}:{port}")
+
+        should_terminate = False
+        while not should_terminate:
+            data, addr = s.recvfrom(4096)
+            message = data.decode('utf-8', errors='replace')
+            print(f"S2 -> S3 (UDP) {addr}: {message}")
+
+            if "FIN" in message:
+                print("S3: FIN recibido. Terminando S3.")
+                should_terminate = True
+                break
+
+            try:
+                parts = message.strip('[]').split(']-[')
+                timestamp, largo_min_str, largo_actual_str, msg = parts[0], parts[1], parts[2], parts[3]
+            except Exception:
+                print("[Error] Mensaje malformado en S3.")
+                continue
+
+            nueva_palabra = input("S3: Ingrese una nueva palabra para agregar: ").strip()
+            mensaje_actualizado = (msg + " " + nueva_palabra).strip()
+            largo_actualizado = len(mensaje_actualizado)
+
+            new_message = f"[{datetime.now()}]-[{largo_min_str}]-[{largo_actualizado}]-[{mensaje_actualizado}]"
+            send_http_post(HOST_S4, PORT_S4_SERVER, new_message)
+
+        print("Servicio 3 terminado.")
+
+if __name__ == "__main__":
+    start_udp_server(HOST_S3, PORT_S3_SERVER)
